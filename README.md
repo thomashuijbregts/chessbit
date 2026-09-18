@@ -1,6 +1,6 @@
 # chessbit - The fastest CPU Perft engine (c++)
 
-(!) Note that I lost access to my [previous github account] (https://github.com/thuijbregts/chessbit)
+(!) Note that I lost access to my [previous github account](https://github.com/thuijbregts/chessbit)
 
 This project was inspired by [Gigantua](https://github.com/Gigantua/Gigantua), and a desire to push the limits. Although most of the logic is my own, I had no idea about bmi instructions and templates before starting the project, so Gigantua's source code was of immense help to discover these concepts. Credit where credit is due! You will find some code that I took from there.
 
