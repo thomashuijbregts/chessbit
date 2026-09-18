@@ -8,6 +8,8 @@ Executable: [Download chessbit](https://github.com/thuijbregts/chessbit/releases
 
 Here are some numbers on an AMD Ryzen 7 9800x3d. Chessbit is able to calculate some positions at over 8BNodes/s on this CPU
 
+This is a benchmark command, running perft on several popular positions, without Transposition Table. It can compute depth 7 of the initial position in about 400ms.
+
 ![](https://i.imgur.com/LOqkZsD.png)
 
 Perft at depth 10, with Transposition Table enabled (16GB)
