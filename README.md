@@ -10,11 +10,11 @@ Here are some numbers on an AMD Ryzen 7 9800x3d. Chessbit is able to calculate s
 
 This is a benchmark command, running perft on several popular positions, without Transposition Table. It can compute depth 7 of the initial position in about 400ms.
 
-![](https://i.imgur.com/LOqkZsD.png)
+![](https://i.imgur.com/Y2KVGtp.png)
 
 Perft at depth 10, with Transposition Table enabled (16GB)
 
-![](https://i.imgur.com/tGAXkLv.png)
+![](https://i.imgur.com/AQgI1cz.png)
 
 ## A little about the implementation...
 ### Overall
