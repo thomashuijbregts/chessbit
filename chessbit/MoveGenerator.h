@@ -43,6 +43,8 @@ namespace movegen {
         }
     };
 
+    inline thread_local Batch batchPool[MAX_DEPTH + 1];
+
     struct NullEval {
         NullMaps maps{};
         U64 count;
@@ -541,9 +543,12 @@ namespace movegen {
         U64 discovers = 0ULL;
         if constexpr (depth != 1) discovers = findDiscoverers<depth>(board);
 
-        Batch batchStorage;
         Batch* batch = nullptr;
-        if constexpr (depth >= 3 && useTT) batch = &batchStorage;
+        if constexpr (depth >= 3 && useTT) {
+            batch = &batchPool[depth];
+            batch->nSize = 0;
+            batch->kSize = 0;
+        }
 
         if (board.checks) [[unlikely]] {
             /*
@@ -801,15 +806,73 @@ namespace movegen {
         /*
             PAWN MOVES
         */
-        const U64 pawnsAtk = board.pM & ~rPins;
-        const U64 pawnsPush = board.pM & ~bPins;
+        U64 pawnsLeftAll, pawnsRightAll, pawnsFwdAll;
 
-        const U64 pawnsLeftAll = pawnsAtkLeft<side>(pawnsAtk & ~bPins) | (pawnsAtkLeft<side>(pawnsAtk & bPins) & bPins);
-        U64 pawnsLeft = pawnsLeftAll & board.occE;
-        const U64 pawnsRightAll = pawnsAtkRight<side>(pawnsAtk & ~bPins) | (pawnsAtkRight<side>(pawnsAtk & bPins) & bPins);
+        if (allPins) {
+            const U64 pawnsAtk  = board.pM & ~rPins;
+            const U64 pawnsPush = board.pM & ~bPins;
+
+            pawnsLeftAll  = pawnsAtkLeft<side>(pawnsAtk & ~bPins)     | (pawnsAtkLeft<side>(pawnsAtk & bPins) & bPins);
+            pawnsRightAll = pawnsAtkRight<side>(pawnsAtk & ~bPins)    | (pawnsAtkRight<side>(pawnsAtk & bPins) & bPins);
+            pawnsFwdAll   = pawnsAtkForward<side>(pawnsPush & ~rPins) | (pawnsAtkForward<side>(pawnsPush & rPins) & rPins);
+
+            bitboard = (board.bM | board.qM) & bPins;
+            Bitloop(bitboard)
+            {
+                from = SquareOf(bitboard);
+
+                attacks = bPins & PIN_RAYS[board.kMS][from];
+
+                if ((1ULL << from) & board.qM) {
+                    if constexpr (depth == 2) null.take<side>(nodes, attacks, from, null.queen, null.maps);
+
+                    if constexpr (depth == 1) {
+                        nodes += Bitcount(attacks);
+                        if constexpr (nullMove) maps->eMap |= attacks & NO_EDGES_ROOK[from];
+                    }
+                    else makeMoves<depth, side, kMoved, Piece::Queen, useTT>(nodes, attacks, from, board, 0ULL, batch);
+                }
+                else {
+                    if constexpr (depth == 2) null.take<side>(nodes, attacks, from, null.bishop, null.maps);
+
+                    if constexpr (depth == 1) {
+                        nodes += Bitcount(attacks);
+                        if constexpr (nullMove) maps->eMap |= attacks & NO_EDGES;
+                    }
+                    else makeMoves<depth, side, kMoved, Piece::Bishop, useTT>(nodes, attacks, from, board, discovers, batch);
+                }
+            }
+
+            bitboard = (board.rM | board.qM) & rPins;
+            Bitloop(bitboard)
+            {
+                from = SquareOf(bitboard);
+
+                const bool isQueen = ((1ULL << from) & board.qM) != 0ULL;
+                attacks = rPins & PIN_RAYS[board.kMS][from];
+
+                if constexpr (depth == 2) null.take<side>(nodes, attacks, from, isQueen ? null.queen : null.rook, null.maps);
+
+                if constexpr (depth == 1) {
+                    nodes += Bitcount(attacks);
+                    if constexpr (nullMove) maps->eMap |= attacks & NO_EDGES_ROOK[from];
+                }
+                else {
+                    if (isQueen)    makeMoves<depth, side, kMoved, Piece::Queen, useTT>(nodes, attacks, from, board, 0ULL, batch);
+                    else            makeMoves<depth, side, kMoved, Piece::Rook, useTT>(nodes, attacks, from, board, discovers, batch);
+                }
+            }
+        }
+        else {
+            pawnsLeftAll  = pawnsAtkLeft<side>(board.pM);
+            pawnsRightAll = pawnsAtkRight<side>(board.pM);
+            pawnsFwdAll   = pawnsAtkForward<side>(board.pM);
+        }
+
+        U64 pawnsLeft  = pawnsLeftAll  & board.occE;
         U64 pawnsRight = pawnsRightAll & board.occE;
-        const U64 pawnsFwdAll = pawnsAtkForward<side>(pawnsPush & ~rPins) | (pawnsAtkForward<side>(pawnsPush & rPins) & rPins);
-        U64 pawnsFwd = pawnsFwdAll & ~board.occB;
+        U64 pawnsFwd   = pawnsFwdAll   & ~board.occB;
+
         const U64 pawnsDblAll = pawnsAtkForward<side>(pawnsFwd & FIRST_PUSH_RANK[side]);
         U64 pawnsDbl = pawnsDblAll & ~board.occB;
 
@@ -940,33 +1003,6 @@ namespace movegen {
             else makeMoves<depth, side, kMoved, Piece::Bishop, useTT>(nodes, attacks, from, board, discovers, batch);
         }
 
-        bitboard = (board.bM | board.qM) & bPins;
-        Bitloop(bitboard)
-        {
-            from = SquareOf(bitboard);
-
-            attacks = bPins & PIN_RAYS[board.kMS][from];
-
-            if ((1ULL << from) & board.qM) {
-                if constexpr (depth == 2) null.take<side>(nodes, attacks, from, null.queen, null.maps);
-
-                if constexpr (depth == 1) {
-                    nodes += Bitcount(attacks);
-                    if constexpr (nullMove) maps->eMap |= attacks & NO_EDGES_ROOK[from];
-                }
-                else makeMoves<depth, side, kMoved, Piece::Queen, useTT>(nodes, attacks, from, board, 0ULL, batch);
-            }
-            else {
-                if constexpr (depth == 2) null.take<side>(nodes, attacks, from, null.bishop, null.maps);
-
-                if constexpr (depth == 1) {
-                    nodes += Bitcount(attacks);
-                    if constexpr (nullMove) maps->eMap |= attacks & NO_EDGES;
-                }
-                else makeMoves<depth, side, kMoved, Piece::Bishop, useTT>(nodes, attacks, from, board, discovers, batch);
-            }
-        }
-
         /*
             ROOK MOVES
         */
@@ -984,26 +1020,6 @@ namespace movegen {
                 if constexpr (nullMove) maps->eMap |= attacks & NO_EDGES_ROOK[from];
             }
             else makeMoves<depth, side, kMoved, Piece::Rook, useTT>(nodes, attacks, from, board, discovers, batch);
-        }
-
-        bitboard = (board.rM | board.qM) & rPins;
-        Bitloop(bitboard)
-        {
-            from = SquareOf(bitboard);
-
-            const bool isQueen = ((1ULL << from) & board.qM) != 0ULL;
-            attacks = rPins & PIN_RAYS[board.kMS][from];
-
-            if constexpr (depth == 2) null.take<side>(nodes, attacks, from, isQueen ? null.queen : null.rook, null.maps);
-
-            if constexpr (depth == 1) {
-                nodes += Bitcount(attacks);
-                if constexpr (nullMove) maps->eMap |= attacks & NO_EDGES_ROOK[from];
-            }
-            else {
-                if (isQueen)    makeMoves<depth, side, kMoved, Piece::Queen, useTT>(nodes, attacks, from, board, 0ULL, batch);
-                else            makeMoves<depth, side, kMoved, Piece::Rook, useTT>(nodes, attacks, from, board, discovers, batch);
-            }
         }
 
         /*
