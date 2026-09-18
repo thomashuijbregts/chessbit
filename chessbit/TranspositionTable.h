@@ -1,0 +1,90 @@
+#pragma once
+#include "Definitions.h"
+#include "Utils.h"
+#include <atomic>
+#include <cstdio>
+#include <cstring>
+#include <cstdlib>
+#include <cstddef>
+#include <new>
+#include <bit>
+
+using namespace defs;
+
+namespace tt {
+    constexpr int MIN_HASH_DEPTH = 2;
+    constexpr int MAX_HASH_DEPTH = 14;
+
+    constexpr int MAX_ENTRIES = 4;
+    constexpr int BUCKET_SIZE = MAX_ENTRIES * 16;
+
+    constexpr U64 DEPTH_BITS = 5;
+    constexpr U64 DEPTH_MASK = (1ULL << DEPTH_BITS) - 1;
+    constexpr U64 COUNT_SHIFT = DEPTH_BITS;
+
+    template <int depth>
+    constexpr bool USE_HASH = (depth >= MIN_HASH_DEPTH && depth <= MAX_HASH_DEPTH);
+
+    struct alignas(BUCKET_SIZE) Bucket {
+        U64 key[MAX_ENTRIES];
+        U64 data[MAX_ENTRIES];
+    };
+
+    inline Bucket* TABLE = nullptr;
+    inline U64     MASK = 0;
+    inline U64     BYTES = 0;
+
+    inline bool usingLargePages = false;
+
+    template <int depth>
+    __forceinline static U64 index(Zobrist z) noexcept {
+        return (z.low + static_cast<U64>(depth)) & MASK;
+    }
+
+    template <int depth>
+    ForceInline Bucket& bucket(Zobrist z) noexcept {
+        return TABLE[index<depth>(z)];
+    }
+
+    template <int depth>
+    ForceInline bool probe(Bucket& b, Zobrist z, U64& nodes) noexcept {
+        for (int i = 0; i < MAX_ENTRIES; ++i) {
+            const U64 d = b.data[i];
+            if (b.key[i] == (z.high ^ d) && (d & DEPTH_MASK) == static_cast<U64>(depth)) {
+                nodes = d >> COUNT_SHIFT;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    template <int depth>
+    ForceInline void write(Bucket& b, Zobrist z, U64 nodes) noexcept {
+        int v = 0;
+        U64 minScore = ~0ULL;
+        for (int i = 0; i < MAX_ENTRIES; ++i) {
+            const U64 di = b.data[i];
+
+            if (b.key[i] == (z.high ^ di) && (di & DEPTH_MASK) == static_cast<U64>(depth)) {
+                return;
+            }
+
+            if (di < minScore) { minScore = di; v = i; }
+        }
+
+        const U64 data = (nodes << COUNT_SHIFT) | static_cast<U64>(depth);
+
+        b.key[v] = z.high ^ data;
+        b.data[v] = data;
+    }
+
+    template <int depth>
+    ForceInline void prefetch(Zobrist z) noexcept {
+        if constexpr (USE_HASH<depth>) {
+            _mm_prefetch(reinterpret_cast<const char*>(&TABLE[index<depth>(z)]), _MM_HINT_T0);
+        }
+    }
+
+    void init(size_t mb = 0);
+    void free();
+}
