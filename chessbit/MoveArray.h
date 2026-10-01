@@ -54,7 +54,7 @@ namespace movarray {
 		int _size;
 	};
 
-	inline thread_local MoveArray movesArray;
+	inline MoveArray movesArray;
 }
 
 #endif
