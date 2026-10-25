@@ -8,6 +8,12 @@
 #include <cstdio>
 #include "AttackTables.h"
 
+#if !defined(_MSC_VER)
+#define __forceinline inline __attribute__((always_inline))
+#define __declspec(X) __attribute__((X))
+#define __popcnt64(X) _mm_popcnt_u64(X)
+#endif
+
 namespace defs {
 #define StartPosition "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 #define KiwiPete "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq -"

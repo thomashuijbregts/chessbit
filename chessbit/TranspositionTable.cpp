@@ -1,9 +1,12 @@
 #include "TranspositionTable.h"
+#if defined(_WIN32)
 #include <windows.h>
 #pragma comment(lib, "advapi32.lib")
+#endif
 
 namespace tt {
 
+#if defined(_WIN32)
     static bool enableLockMemoryPrivilege() {
         HANDLE token;
         if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &token))
@@ -24,6 +27,7 @@ namespace tt {
         CloseHandle(token);
         return ok;
     }
+#endif
 
     void init(size_t mb) {
         printf("\n");
@@ -59,6 +63,7 @@ namespace tt {
 
         usingLargePages = false;
 
+#if defined(_WIN32)
         if (enableLockMemoryPrivilege()) {
             SIZE_T largePageMin = GetLargePageMinimum();
             if (largePageMin > 0) {
@@ -73,6 +78,7 @@ namespace tt {
                 }
             }
         }
+#endif
 
         if (!usingLargePages) {
             TABLE = static_cast<Bucket*>(::operator new(BYTES, std::align_val_t(64)));
@@ -85,8 +91,11 @@ namespace tt {
 
     void free() {
         if (TABLE) {
+#if defined(_WIN32)
             if (usingLargePages) VirtualFree(TABLE, 0, MEM_RELEASE);
-            else                 ::operator delete(TABLE, std::align_val_t(64));
+            else
+#endif
+                                 ::operator delete(TABLE, std::align_val_t(64));
 
             TABLE = nullptr;
             MASK = 0;
