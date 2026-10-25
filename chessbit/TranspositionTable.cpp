@@ -1,9 +1,15 @@
 #include "TranspositionTable.h"
+
+#if defined(_WIN32)
 #include <windows.h>
 #pragma comment(lib, "advapi32.lib")
+#else
+#include <sys/mman.h>
+#endif
 
 namespace tt {
 
+#if defined(_WIN32)
     static bool enableLockMemoryPrivilege() {
         HANDLE token;
         if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &token))
@@ -24,6 +30,7 @@ namespace tt {
         CloseHandle(token);
         return ok;
     }
+#endif
 
     void init(size_t mb) {
         printf("\n");
@@ -59,6 +66,7 @@ namespace tt {
 
         usingLargePages = false;
 
+#if defined(_WIN32)
         if (enableLockMemoryPrivilege()) {
             SIZE_T largePageMin = GetLargePageMinimum();
             if (largePageMin > 0) {
@@ -78,6 +86,12 @@ namespace tt {
             TABLE = static_cast<Bucket*>(::operator new(BYTES, std::align_val_t(64)));
             printf("Large pages unavailable, using standard allocation\n");
         }
+#else
+        constexpr size_t HUGE_PAGE = 2 * 1024 * 1024;
+        TABLE = static_cast<Bucket*>(::operator new(BYTES, std::align_val_t(HUGE_PAGE)));
+        if (madvise(TABLE, BYTES, MADV_HUGEPAGE) == 0) printf("Using transparent huge pages\n");
+        else                                           printf("Huge pages unavailable, using standard allocation\n");
+#endif
 
         std::memset(TABLE, 0, BYTES);
         printf("Initialization complete\n\n");
@@ -85,8 +99,12 @@ namespace tt {
 
     void free() {
         if (TABLE) {
+#if defined(_WIN32)
             if (usingLargePages) VirtualFree(TABLE, 0, MEM_RELEASE);
             else                 ::operator delete(TABLE, std::align_val_t(64));
+#else
+            ::operator delete(TABLE, std::align_val_t(2 * 1024 * 1024));
+#endif
 
             TABLE = nullptr;
             MASK = 0;
