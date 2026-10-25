@@ -151,6 +151,41 @@ namespace movegen {
         }
     };
 
+#if defined(__AVX512F__) && defined(__AVX512VPOPCNTDQ__)
+    // Counts the moves of all given sliders and knights at once, without iterating over the pieces.
+    ForceInline U64 countSetwise(U64 orth, U64 diag, U64 knights, U64 empty, U64 targets) noexcept {
+        constexpr U64 R1 = 0xFF00000000000000ULL, R2 = 0x00FF000000000000ULL;
+        constexpr U64 R7 = 0x000000000000FF00ULL, R8 = 0x00000000000000FFULL;
+        constexpr U64 FA = 0x0101010101010101ULL, FB = 0x0202020202020202ULL;
+        constexpr U64 FG = 0x4040404040404040ULL, FH = 0x8080808080808080ULL;
+
+        const __m512i rot1 = _mm512_setr_epi64(56, 8, 1, 63, 57, 55, 9, 7);
+        const __m512i rot2 = _mm512_setr_epi64(48, 16, 2, 62, 50, 46, 18, 14);
+        const __m512i rot4 = _mm512_setr_epi64(32, 32, 4, 60, 36, 28, 36, 28);
+        const __m512i wrap = _mm512_setr_epi64(~R1, ~R8, ~FA, ~FH, ~(FA | R1), ~(FH | R1), ~(FA | R8), ~(FH | R8));
+
+        const __m512i jumps = _mm512_setr_epi64(49, 47, 58, 54, 17, 15, 10, 6);
+        const __m512i jumpWrap = _mm512_setr_epi64(
+            ~(FA | R1 | R2), ~(FH | R1 | R2), ~(FA | FB | R1), ~(FG | FH | R1),
+            ~(FA | R8 | R7), ~(FH | R8 | R7), ~(FA | FB | R8), ~(FG | FH | R8));
+        const __m512i targetVec = _mm512_set1_epi64(targets);
+
+        __m512i gen = _mm512_mask_blend_epi64(0xF0, _mm512_set1_epi64(orth), _mm512_set1_epi64(diag));
+        __m512i pro = _mm512_and_si512(_mm512_set1_epi64(empty), wrap);
+        gen = _mm512_or_si512(gen, _mm512_and_si512(pro, _mm512_rolv_epi64(gen, rot1)));
+        pro = _mm512_and_si512(pro, _mm512_rolv_epi64(pro, rot1));
+        gen = _mm512_or_si512(gen, _mm512_and_si512(pro, _mm512_rolv_epi64(gen, rot2)));
+        pro = _mm512_and_si512(pro, _mm512_rolv_epi64(pro, rot2));
+        gen = _mm512_or_si512(gen, _mm512_and_si512(pro, _mm512_rolv_epi64(gen, rot4)));
+        const __m512i slides = _mm512_and_si512(_mm512_rolv_epi64(gen, rot1), _mm512_and_si512(wrap, targetVec));
+
+        const __m512i hops = _mm512_and_si512(_mm512_rolv_epi64(_mm512_set1_epi64(knights), jumps),
+            _mm512_and_si512(jumpWrap, targetVec));
+
+        return _mm512_reduce_add_epi64(_mm512_add_epi64(_mm512_popcnt_epi64(slides), _mm512_popcnt_epi64(hops)));
+    }
+#endif
+
     template <bool side, bool kMMoved, bool nullMove>
     ForceInline U64 enemyAttacks(const BoardState& board, NullMaps* maps) noexcept {
         U64 attacks = 0ULL;
@@ -968,77 +1003,86 @@ namespace movegen {
             }
         }
 
-        /*
-            KNIGHT MOVES
-        */
-        bitboard = board.nM & ~allPins;
-        Bitloop(bitboard)
-        {
-            from = SquareOf(bitboard);
-
-            attacks = getKnightAttacks(from) & ~board.occM;
-
-            if constexpr (depth == 2) null.take<side>(nodes, attacks, from, null.knight);
-
-            if constexpr (depth == 1) nodes += Bitcount(attacks);
-            else makeMoves<depth, side, kMoved, n, useTT>(nodes, attacks, from, board, discovers, batch);
+#if defined(__AVX512F__) && defined(__AVX512VPOPCNTDQ__)
+        if constexpr (depth == 1 && !nullMove) {
+            nodes += countSetwise((board.rM | board.qM) & ~allPins, (board.bM | board.qM) & ~allPins,
+                board.nM & ~allPins, ~board.occB, ~board.occM);
         }
-
-        /*
-            BISHOP MOVES
-        */
-        bitboard = board.bM & ~allPins;
-        Bitloop(bitboard)
+        else
+#endif
         {
-            from = SquareOf(bitboard);
+            /*
+                KNIGHT MOVES
+            */
+            bitboard = board.nM & ~allPins;
+            Bitloop(bitboard)
+            {
+                from = SquareOf(bitboard);
 
-            attacks = getBishopAttacks(from, board.occB) & ~board.occM;
+                attacks = getKnightAttacks(from) & ~board.occM;
 
-            if constexpr (depth == 2) null.take<side>(nodes, attacks, from, null.bishop);
+                if constexpr (depth == 2) null.take<side>(nodes, attacks, from, null.knight);
 
-            if constexpr (depth == 1) {
-                nodes += Bitcount(attacks);
-                if constexpr (nullMove) maps->eMap |= attacks & NO_EDGES;
+                if constexpr (depth == 1) nodes += Bitcount(attacks);
+                else makeMoves<depth, side, kMoved, n, useTT>(nodes, attacks, from, board, discovers, batch);
             }
-            else makeMoves<depth, side, kMoved, b, useTT>(nodes, attacks, from, board, discovers, batch);
-        }
 
-        /*
-            ROOK MOVES
-        */
-        bitboard = board.rM & ~allPins;
-        Bitloop(bitboard)
-        {
-            from = SquareOf(bitboard);
+            /*
+                BISHOP MOVES
+            */
+            bitboard = board.bM & ~allPins;
+            Bitloop(bitboard)
+            {
+                from = SquareOf(bitboard);
 
-            attacks = getRookAttacks(from, board.occB) & ~board.occM;
+                attacks = getBishopAttacks(from, board.occB) & ~board.occM;
 
-            if constexpr (depth == 2) null.take<side>(nodes, attacks, from, null.rook);
+                if constexpr (depth == 2) null.take<side>(nodes, attacks, from, null.bishop);
 
-            if constexpr (depth == 1) {
-                nodes += Bitcount(attacks);
-                if constexpr (nullMove) maps->eMap |= attacks & NO_EDGES_ROOK[from];
+                if constexpr (depth == 1) {
+                    nodes += Bitcount(attacks);
+                    if constexpr (nullMove) maps->eMap |= attacks & NO_EDGES;
+                }
+                else makeMoves<depth, side, kMoved, b, useTT>(nodes, attacks, from, board, discovers, batch);
             }
-            else makeMoves<depth, side, kMoved, r, useTT>(nodes, attacks, from, board, discovers, batch);
-        }
 
-        /*
-            QUEEN MOVES
-        */
-        bitboard = board.qM & ~allPins;
-        Bitloop(bitboard)
-        {
-            from = SquareOf(bitboard);
+            /*
+                ROOK MOVES
+            */
+            bitboard = board.rM & ~allPins;
+            Bitloop(bitboard)
+            {
+                from = SquareOf(bitboard);
 
-            attacks = getQueenAttacks(from, board.occB) & ~board.occM;
+                attacks = getRookAttacks(from, board.occB) & ~board.occM;
 
-            if constexpr (depth == 2) null.take<side>(nodes, attacks, from, null.queen);
+                if constexpr (depth == 2) null.take<side>(nodes, attacks, from, null.rook);
 
-            if constexpr (depth == 1) {
-                nodes += Bitcount(attacks);
-                if constexpr (nullMove) maps->eMap |= attacks & NO_EDGES_ROOK[from];
+                if constexpr (depth == 1) {
+                    nodes += Bitcount(attacks);
+                    if constexpr (nullMove) maps->eMap |= attacks & NO_EDGES_ROOK[from];
+                }
+                else makeMoves<depth, side, kMoved, r, useTT>(nodes, attacks, from, board, discovers, batch);
             }
-            else makeMoves<depth, side, kMoved, q, useTT>(nodes, attacks, from, board, 0ULL, batch);
+
+            /*
+                QUEEN MOVES
+            */
+            bitboard = board.qM & ~allPins;
+            Bitloop(bitboard)
+            {
+                from = SquareOf(bitboard);
+
+                attacks = getQueenAttacks(from, board.occB) & ~board.occM;
+
+                if constexpr (depth == 2) null.take<side>(nodes, attacks, from, null.queen);
+
+                if constexpr (depth == 1) {
+                    nodes += Bitcount(attacks);
+                    if constexpr (nullMove) maps->eMap |= attacks & NO_EDGES_ROOK[from];
+                }
+                else makeMoves<depth, side, kMoved, q, useTT>(nodes, attacks, from, board, 0ULL, batch);
+            }
         }
 
         /*
